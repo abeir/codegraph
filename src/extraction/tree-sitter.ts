@@ -1251,6 +1251,21 @@ export class TreeSitterExtractor {
           }
         }
       }
+    } else if (this.language === 'gdscript') {
+      // GDScript: variable_statement has name as a 'name' field
+      // (e.g., `var health: int = 100` or `@export var speed: float = 300.0`)
+      const nameNode = getChildByField(node, 'name');
+      if (nameNode) {
+        const name = getNodeText(nameNode, this.source);
+        const valueNode = getChildByField(node, 'value');
+        const initValue = valueNode ? getNodeText(valueNode, this.source).slice(0, 100) : undefined;
+        const initSignature = initValue ? `= ${initValue}${initValue.length >= 100 ? '...' : ''}` : undefined;
+        this.createNode(kind, name, nameNode, {
+          docstring,
+          signature: initSignature,
+          isExported,
+        });
+      }
     } else if (this.language === 'lua' || this.language === 'luau') {
       // Lua/Luau: variable_declaration → assignment_statement → variable_list
       //      (name: identifier...) = expression_list. `local x, y = 1, 2`

@@ -101,6 +101,11 @@ describe('Language Detection', () => {
     expect(detectLanguage('stdio.h', '#ifndef STDIO_H\nvoid printf();\n#endif\n')).toBe('c');
   });
 
+  it('should detect GDScript files', () => {
+    expect(detectLanguage('player.gd')).toBe('gdscript');
+    expect(detectLanguage('src/scripts/combat.gd')).toBe('gdscript');
+  });
+
   it('should return unknown for unsupported extensions', () => {
     expect(detectLanguage('styles.css')).toBe('unknown');
     expect(detectLanguage('data.json')).toBe('unknown');
@@ -4185,6 +4190,185 @@ local function run(y) return helper(y) end
         (r) => r.referenceKind === 'calls' && r.referenceName === 'helper'
       );
       expect(call).toBeDefined();
+    });
+  });
+});
+
+// =============================================================================
+// GDScript (Godot Engine scripting language)
+// =============================================================================
+
+describe('GDScript Extraction', () => {
+  describe('Language detection', () => {
+    it('should detect GDScript files', () => {
+      expect(detectLanguage('player.gd')).toBe('gdscript');
+      expect(detectLanguage('src/scripts/combat.gd')).toBe('gdscript');
+    });
+
+    it('should report GDScript as supported', () => {
+      expect(isLanguageSupported('gdscript')).toBe(true);
+      expect(getSupportedLanguages()).toContain('gdscript');
+    });
+  });
+
+  describe('Function extraction', () => {
+    it('should extract functions with parameters and return types', () => {
+      const code = `
+extends Node
+
+func _ready() -> void:
+    pass
+
+func take_damage(amount: int) -> void:
+    health -= amount
+
+static func get_version() -> String:
+    return "1.0.0"
+`;
+      const result = extractFromSource('player.gd', code);
+      const funcs = result.nodes.filter((n) => n.kind === 'function').map((n) => n.name);
+      expect(funcs).toContain('_ready');
+      expect(funcs).toContain('take_damage');
+      expect(funcs).toContain('get_version');
+      const td = result.nodes.find((n) => n.name === 'take_damage');
+      expect(td?.language).toBe('gdscript');
+    });
+  });
+
+  describe('Class extraction', () => {
+    it('should extract inner classes', () => {
+      const code = `
+class PlayerData:
+    var name: String = ""
+    var score: int = 0
+
+    func reset() -> void:
+        name = ""
+        score = 0
+`;
+      const result = extractFromSource('data.gd', code);
+      const classes = result.nodes.filter((n) => n.kind === 'class');
+      expect(classes.map((c) => c.name)).toContain('PlayerData');
+      const methods = result.nodes.filter((n) => n.kind === 'method');
+      expect(methods.map((m) => m.name)).toContain('reset');
+    });
+  });
+
+  describe('Enum extraction', () => {
+    it('should extract enums and their members', () => {
+      const code = `
+enum GameState { MENU, PLAYING, PAUSED }
+enum Direction { UP, DOWN, LEFT, RIGHT }
+`;
+      const result = extractFromSource('enums.gd', code);
+      const enums = result.nodes.filter((n) => n.kind === 'enum');
+      expect(enums.map((e) => e.name)).toContain('GameState');
+      expect(enums.map((e) => e.name)).toContain('Direction');
+      const members = result.nodes.filter((n) => n.kind === 'enum_member');
+      expect(members.length).toBe(7);
+      expect(members.map((m) => m.name)).toContain('MENU');
+      expect(members.map((m) => m.name)).toContain('PLAYING');
+    });
+  });
+
+  describe('Variable extraction', () => {
+    it('should extract variables and constants', () => {
+      const code = `
+const DEFAULT_SPEED: float = 400.0
+var current_state: int = 0
+@export var player_speed: float = DEFAULT_SPEED
+@onready var sprite: Sprite2D = $Sprite
+`;
+      const result = extractFromSource('vars.gd', code);
+      const consts = result.nodes.filter((n) => n.kind === 'constant');
+      expect(consts.map((c) => c.name)).toContain('DEFAULT_SPEED');
+      const vars = result.nodes.filter((n) => n.kind === 'variable');
+      expect(vars.map((v) => v.name)).toContain('current_state');
+      expect(vars.map((v) => v.name)).toContain('player_speed');
+      expect(vars.map((v) => v.name)).toContain('sprite');
+    });
+  });
+
+  describe('Signal extraction', () => {
+    it('should extract signals as method-like nodes', () => {
+      const code = `
+signal health_changed(new_health: int)
+signal died
+`;
+      const result = extractFromSource('signals.gd', code);
+      const methods = result.nodes.filter((n) => n.kind === 'method');
+      expect(methods.map((m) => m.name)).toContain('health_changed');
+      expect(methods.map((m) => m.name)).toContain('died');
+    });
+  });
+
+  describe('Call extraction', () => {
+    it('should extract function calls', () => {
+      const code = `
+func _ready() -> void:
+    print("hello")
+    queue_free()
+
+func update(delta: float) -> void:
+    player.move_and_slide()
+    emit_signal("updated", delta)
+`;
+      const result = extractFromSource('calls.gd', code);
+      const refs = result.unresolvedReferences.filter(
+        (r) => r.referenceKind === 'calls'
+      );
+      const calleeNames = refs.map((r) => r.referenceName);
+      expect(calleeNames).toContain('print');
+      expect(calleeNames).toContain('queue_free');
+    });
+  });
+
+  describe('Import extraction (preload/load)', () => {
+    it('should create import nodes for preload() calls', () => {
+      const code = `
+const WeaponData = preload("res://weapon_data.gd")
+`;
+      const result = extractFromSource('main.gd', code);
+      const imports = result.nodes.filter((n) => n.kind === 'import');
+      expect(imports.map((i) => i.name)).toContain('res://weapon_data.gd');
+      const refs = result.unresolvedReferences.filter(
+        (r) => r.referenceKind === 'imports'
+      );
+      expect(refs.map((r) => r.referenceName)).toContain('res://weapon_data.gd');
+    });
+
+    it('should create import nodes for load() calls', () => {
+      const code = `
+var config = load("res://config.tres")
+`;
+      const result = extractFromSource('main.gd', code);
+      const imports = result.nodes.filter((n) => n.kind === 'import');
+      expect(imports.map((i) => i.name)).toContain('res://config.tres');
+    });
+
+    it('should create import nodes for preload() in exported variable', () => {
+      const code = `
+@export var enemy_data = preload("res://enemy_data.gd")
+`;
+      const result = extractFromSource('main.gd', code);
+      const imports = result.nodes.filter((n) => n.kind === 'import');
+      expect(imports.map((i) => i.name)).toContain('res://enemy_data.gd');
+    });
+  });
+
+  describe('Extends resolution', () => {
+    it('should create extends reference from extends_statement', () => {
+      const code = `
+extends CharacterBody2D
+
+class_name Player
+`;
+      const result = extractFromSource('player.gd', code);
+      const refs = result.unresolvedReferences.filter(
+        (r) => r.referenceKind === 'extends'
+      );
+      expect(refs.length).toBeGreaterThanOrEqual(1);
+      expect(refs.map((r) => r.referenceName)).toContain('CharacterBody2D');
     });
   });
 });
